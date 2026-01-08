@@ -1,0 +1,135 @@
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from youtube_transcript_api import YouTubeTranscriptApi
+import re
+import os
+
+app = Flask(__name__, static_folder='static')
+CORS(app)
+
+def extract_video_id(url):
+    """Extract YouTube video ID from URL"""
+    patterns = [
+        r'(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?]*)',
+        r'youtube\.com\/embed\/([^&\n?]*)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+def parse_content_with_ai(transcript_text):
+    """Parse transcript into structured recipe/tutorial data"""
+    # This is a simplified parser. In production, you'd use Claude API or similar
+    lines = transcript_text.lower().split('.')
+    
+    ingredients = []
+    tools = []
+    steps = []
+    
+    # Keywords for detection
+    ingredient_keywords = ['cup', 'tablespoon', 'teaspoon', 'gram', 'ounce', 'pound', 'liter', 'ml']
+    tool_keywords = ['bowl', 'pan', 'knife', 'spoon', 'mixer', 'oven', 'blender']
+    action_keywords = ['add', 'mix', 'stir', 'pour', 'cut', 'chop', 'bake', 'cook', 'heat']
+    skip_keywords = ['subscribe', 'like', 'comment', 'sponsor', 'patreon', 'link below', 'description']
+    
+    step_number = 1
+    for line in lines:
+        line = line.strip()
+        if len(line) < 10 or any(skip in line for skip in skip_keywords):
+            continue
+            
+        # Detect ingredients
+        if any(keyword in line for keyword in ingredient_keywords):
+            # Extract measurement and ingredient
+            ingredient_match = re.search(r'(\d+(?:/\d+)?\s*(?:' + '|'.join(ingredient_keywords) + r').*?)(?:\.|$)', line)
+            if ingredient_match and ingredient_match.group(1) not in ingredients:
+                ingredients.append(ingredient_match.group(1).strip())
+        
+        # Detect tools
+        for tool in tool_keywords:
+            if tool in line and tool not in [t.lower() for t in tools]:
+                tools.append(tool.capitalize())
+        
+        # Detect steps (sentences with action verbs)
+        if any(action in line for action in action_keywords):
+            if len(line) > 20 and line not in [s['text'].lower() for s in steps]:
+                steps.append({
+                    'number': step_number,
+                    'text': line.capitalize(),
+                    'completed': False
+                })
+                step_number += 1
+    
+    return {
+        'ingredients': ingredients[:15] if ingredients else ['Check video for ingredients list'],
+        'tools': tools[:10] if tools else ['Check video for tools needed'],
+        'steps': steps if steps else [{'number': 1, 'text': 'Unable to auto-parse steps. Please watch video.', 'completed': False}]
+    }
+
+@app.route('/')
+def index():
+    return send_from_directory('static', 'index.html')
+
+@app.route('/api/extract', methods=['POST'])
+def extract_recipe():
+    try:
+        data = request.json
+        video_url = data.get('url')
+        
+        if not video_url:
+            return jsonify({'error': 'No URL provided'}), 400
+        
+        video_id = extract_video_id(video_url)
+        if not video_id:
+            return jsonify({'error': 'Invalid YouTube URL'}), 400
+        
+        # Get transcript
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        transcript_text = ' '.join([entry['text'] for entry in transcript])
+        
+        # Parse content
+        parsed_data = parse_content_with_ai(transcript_text)
+        
+        return jsonify({
+            'success': True,
+            'video_id': video_id,
+            'data': parsed_data
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/convert', methods=['POST'])
+def convert_units():
+    """Convert between metric and imperial units"""
+    data = request.json
+    value = float(data.get('value', 0))
+    from_unit = data.get('from_unit', '').lower()
+    to_unit = data.get('to_unit', '').lower()
+    
+    conversions = {
+        ('cup', 'ml'): 236.588,
+        ('ml', 'cup'): 1/236.588,
+        ('tablespoon', 'ml'): 14.787,
+        ('ml', 'tablespoon'): 1/14.787,
+        ('teaspoon', 'ml'): 4.929,
+        ('ml', 'teaspoon'): 1/4.929,
+        ('gram', 'ounce'): 0.035274,
+        ('ounce', 'gram'): 28.3495,
+        ('pound', 'kg'): 0.453592,
+        ('kg', 'pound'): 2.20462,
+    }
+    
+    conversion_key = (from_unit, to_unit)
+    if conversion_key in conversions:
+        result = value * conversions[conversion_key]
+        return jsonify({'result': round(result, 2)})
+    
+    return jsonify({'error': 'Conversion not supported'}), 400
+
+if __name__ == '__main__':
+    # Create static folder if it doesn't exist
+    os.makedirs('static', exist_ok=True)
+    app.run(debug=True, port=5000)
