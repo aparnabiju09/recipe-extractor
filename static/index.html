@@ -413,11 +413,10 @@
 
             loading.style.display = 'block';
             results.classList.remove('show');
-            error.style.display = 'none';
-            btn.disabled = true;
+            error.style.display = 'none';            btn.disabled = true;
 
             try {
-                const response = await fetch('http://localhost:5000/api/extract', {
+                const response = await fetch('/api/extract', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url })
@@ -488,7 +487,7 @@
             const toUnit = document.getElementById('toUnit').value;
 
             try {
-                const response = await fetch('http://localhost:5000/api/convert', {
+                const response = await fetch('/api/convert', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ value, from_unit: fromUnit, to_unit: toUnit })
